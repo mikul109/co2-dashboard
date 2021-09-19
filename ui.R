@@ -4,6 +4,12 @@ library(shinythemes)
 library(plotly)
 library(leaflet)
 
+## grab data from github
+raw_Data <- read.csv("https://raw.githubusercontent.com/owid/co2-data/master/owid-co2-data.csv")
+
+# world data
+world_Data <- subset(raw_Data, iso_code == "OWID_WRL")
+
 shinyUI(
   ## Main ui
   navbarPage(theme = shinytheme("sandstone"),
