@@ -147,8 +147,8 @@ function(input, output, session) {
   countries <- sort(unique(country_Data$country))
   
   # use to 'translate' dropdown choice
-  dropdown <- c("None", "Per Capita", "Per GDP", "None", "7 Years", "30 Years", "Production-based", "Consumption-based", "Total Greenhouse Gases", "Methane", "Nitrous Oxide", "Production-based CO2", "Consumption-based CO2", "Coal CO2", "Cement CO2", "Flaring CO2", "Gas CO2", "Oil CO2", "Other CO2", "NAIVE", "EXPONENTIAL SMOOTHING", "ARIMA", "NEURAL NETWORK")
-  data_column <-c("", "_per_capita", "_per_gdp", "", "7", "30", "co2", "consumption_co2", "total_ghg", "methane", "nitrous_oxide", "co2", "consumption_co2", "coal_co2", "cement_co2", "flaring_co2", "gas_co2", "oil_co2", "other_co2", "naive", "ets", "auto.arima", "nnetar") 
+  dropdown <- c("None", "Per Capita", "Per GDP", "None", "7 Years", "30 Years", "Production-based", "Consumption-based", "Total Greenhouse Gases", "Methane", "Nitrous Oxide", "Production-based CO2", "Consumption-based CO2", "Coal CO2", "Cement CO2", "Flaring CO2", "Gas CO2", "Oil CO2", "Other CO2", "NAIVE", "SIMPLE EXPONENTIAL SMOOTHING", "HOLT", "ETS", "ARIMA", "NEURAL NETWORK")
+  data_column <-c("", "_per_capita", "_per_gdp", "", "7", "30", "co2", "consumption_co2", "total_ghg", "methane", "nitrous_oxide", "co2", "consumption_co2", "coal_co2", "cement_co2", "flaring_co2", "gas_co2", "oil_co2", "other_co2", "naive", "ses", "holt", "ets","auto.arima", "nnetar") 
   choice <- data.frame(dropdown, data_column)
   
   # Update for country input and metric input
@@ -159,7 +159,7 @@ function(input, output, session) {
   updatePickerInput(session, "emission", choices=c("Total Greenhouse Gases", "Methane", "Nitrous Oxide"), selected = "Total Greenhouse Gases")
   updatePickerInput(session, "co2", choices=c("Production-based", "Consumption-based"), selected = "Production-based")
   updatePickerInput(session, "plot", choices=c("Production-based CO2", "Consumption-based CO2", "Coal CO2", "Cement CO2", "Flaring CO2", "Gas CO2", "Oil CO2", "Other CO2"), selected = "Production-based CO2") 
-  updatePickerInput(session, "forecast", choices=c("NAIVE", "EXPONENTIAL SMOOTHING", "ARIMA", "NEURAL NETWORK"), selected = "ARIMA") 
+  updatePickerInput(session, "forecast", choices=c("NAIVE", "SIMPLE EXPONENTIAL SMOOTHING", "HOLT", "ETS","ARIMA", "NEURAL NETWORK"), selected = "ARIMA") 
   updateNumericInput(session, "step-ahead", value = 10, min = 0, max = NULL, step = NULL)
   
 ### Output
@@ -292,7 +292,8 @@ function(input, output, session) {
     ts_annual = ts(annual_world[,2], start=min(annual_world[,1]))
     
     # get forecast
-    if (identical(input$forecast, "NAIVE")){
+    v <- c("NAIVE", "HOLT", "SIMPLE EXPONENTIAL SMOOTHING") 
+    if (input$forecast %in% v){
       forecast = do.call(choice[match(input$forecast,choice$dropdown),2], list(ts_annual, h=input$`step-ahead`))
     } 
     else {
@@ -332,7 +333,8 @@ function(input, output, session) {
     ts_total = ts(total_world[,2], start=min(total_world[,1]))
     
     # get forecast
-    if (identical(input$forecast, "NAIVE")){
+    v <- c("NAIVE", "HOLT", "SIMPLE EXPONENTIAL SMOOTHING") 
+    if (input$forecast %in% v){
       forecast = do.call(choice[match(input$forecast,choice$dropdown),2], list(ts_total, h=input$`step-ahead`))
     } 
     else {
