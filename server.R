@@ -10,6 +10,8 @@ library(rgdal) # for readOGR function
 library(rmapshaper) # for ms_simplify function
 library(ezplot) # for labels
 library(DT) # for datatable
+library(forecast) # for time-series forecasting
+library(dygraphs) # plot the forecasts
 
 ## grab data from github
 raw_Data <- read.csv("https://raw.githubusercontent.com/owid/co2-data/master/owid-co2-data.csv")
@@ -17,7 +19,9 @@ raw_Data <- read.csv("https://raw.githubusercontent.com/owid/co2-data/master/owi
 # world data
 world_Data <- subset(raw_Data, iso_code == "OWID_WRL")
 names(world_Data)[names(world_Data) == "other_industry_co2"] <- "other_co2"
-world_Data <- world_Data %>% group_by(country) %>% mutate(cumulative_consumption_co2=cumsum(ifelse(is.na(consumption_co2), 0, consumption_co2)) + consumption_co2*0)
+world_Data <- world_Data %>% 
+  group_by(country) %>% 
+  mutate(cumulative_consumption_co2=cumsum(ifelse(is.na(consumption_co2), 0, consumption_co2)) + consumption_co2*0)
 
 # remove non-countries that have no iso_code, Oceania, Africa, etc.
 country_Data <- raw_Data[!(raw_Data$iso_code == ""),]
@@ -133,7 +137,6 @@ mapData@data = right_join(mapData@data, cumulative, by = c('ISO_A3' = 'iso_code'
 # only keep matching data
 mapData@polygons = mapData@polygons[countries@data$ISO_A3 %in% cumulative$iso_code]
 
-
 ################ Build the charts ################ 
 function(input, output, session) {
 ### Input
@@ -144,8 +147,8 @@ function(input, output, session) {
   countries <- sort(unique(country_Data$country))
   
   # use to 'translate' dropdown choice
-  dropdown <- c("None", "Per Capita", "Per GDP", "None", "7 Years", "30 Years", "Production-based", "Consumption-based", "Total Greenhouse Gases", "Methane", "Nitrous Oxide", "Production-based CO2", "Consumption-based CO2", "Coal CO2", "Cement CO2", "Flaring CO2", "Gas CO2", "Oil CO2", "Other CO2")
-  data_column <-c("", "_per_capita", "_per_gdp", "", "7", "30", "co2", "consumption_co2", "total_ghg", "methane", "nitrous_oxide", "co2", "consumption_co2", "coal_co2", "cement_co2", "flaring_co2", "gas_co2", "oil_co2", "other_co2") 
+  dropdown <- c("None", "Per Capita", "Per GDP", "None", "7 Years", "30 Years", "Production-based", "Consumption-based", "Total Greenhouse Gases", "Methane", "Nitrous Oxide", "Production-based CO2", "Consumption-based CO2", "Coal CO2", "Cement CO2", "Flaring CO2", "Gas CO2", "Oil CO2", "Other CO2", "NAIVE", "EXPONENTIAL SMOOTHING", "ARIMA", "NEURAL NETWORK")
+  data_column <-c("", "_per_capita", "_per_gdp", "", "7", "30", "co2", "consumption_co2", "total_ghg", "methane", "nitrous_oxide", "co2", "consumption_co2", "coal_co2", "cement_co2", "flaring_co2", "gas_co2", "oil_co2", "other_co2", "naive", "ets", "auto.arima", "nnetar") 
   choice <- data.frame(dropdown, data_column)
   
   # Update for country input and metric input
@@ -156,7 +159,9 @@ function(input, output, session) {
   updatePickerInput(session, "emission", choices=c("Total Greenhouse Gases", "Methane", "Nitrous Oxide"), selected = "Total Greenhouse Gases")
   updatePickerInput(session, "co2", choices=c("Production-based", "Consumption-based"), selected = "Production-based")
   updatePickerInput(session, "plot", choices=c("Production-based CO2", "Consumption-based CO2", "Coal CO2", "Cement CO2", "Flaring CO2", "Gas CO2", "Oil CO2", "Other CO2"), selected = "Production-based CO2") 
-
+  updatePickerInput(session, "forecast", choices=c("NAIVE", "EXPONENTIAL SMOOTHING", "ARIMA", "NEURAL NETWORK"), selected = "ARIMA") 
+  updateNumericInput(session, "step-ahead", value = 10, min = 0, max = NULL, step = NULL)
+  
 ### Output
 
   ## Plots
@@ -281,35 +286,83 @@ function(input, output, session) {
   }) 
   
   # Annual line chart
-  output$w1 <- renderPlotly({
+  output$w1 <- renderDygraph({
     if (identical(input$plot, "")) return(NULL)
-    annual_world <- world_Data[[paste0(choice[match(input$plot,choice$dropdown),2])]]
-
-    a <- ggplot(data = world_Data) + 
-      geom_line(aes(year, 
-                    annual_world)) +
-      labs(title = paste0("World Annual ", input$plot),
-           x = "",
-           y = "",
-           colour = "")
+    annual_world <- world_Data[,c('year', paste0(choice[match(input$plot,choice$dropdown),2]))]
+    ts_annual = ts(annual_world[,2], start=min(annual_world[,1]))
     
-    ggplotly(a, tooltip = c("x", "y", "colour"))
+    # get forecast
+    if (identical(input$forecast, "NAIVE")){
+      forecast = do.call(choice[match(input$forecast,choice$dropdown),2], list(ts_annual, h=input$`step-ahead`))
+    } 
+    else {
+    model <- do.call(choice[match(input$forecast,choice$dropdown),2], list(ts_annual))
+    forecast <- forecast(model, h=input$`step-ahead`)
+    }
+    
+    if (identical(input$forecast, "NEURAL NETWORK")){
+      # plot forecast
+      {cbind(actuals=forecast$x, forecast_mean=forecast$mean)} %>%
+        dygraph(main=paste0("World Annual ", input$plot, " Emissions")) %>%
+        dySeries("actuals", color = "black") %>%
+        dySeries("forecast_mean", label = "forecast", color = "blue") %>%
+        dyAxis("x", drawGrid = FALSE) %>%
+        dyOptions(includeZero = TRUE, 
+                  axisLineColor = "navy", 
+                  gridLineColor = "lightblue")
+    } else{
+    # plot forecast
+    {cbind(actuals=forecast$x, forecast_mean=forecast$mean,
+                  lower_95=forecast$lower[,"95%"], upper_95=forecast$upper[,"95%"])} %>%
+      dygraph(main=paste0("World Annual ", input$plot, " Emissions")) %>%
+      dySeries("actuals", color = "black") %>%
+      dySeries(c("lower_95", "forecast_mean", "upper_95"),
+               label = "forecast", color = "blue") %>%
+      dyAxis("x", drawGrid = FALSE) %>%
+      dyOptions(includeZero = TRUE, 
+                  axisLineColor = "navy", 
+                  gridLineColor = "lightblue")
+    }
   })
   
   # Total line chart
-  output$w2 <- renderPlotly({
+  output$w2 <- renderDygraph({
     if (identical(input$plot, "")) return(NULL)
-    total_world <- world_Data[[paste0("cumulative_", choice[match(input$plot,choice$dropdown),2])]]
+    total_world <- world_Data[,c('year', paste0("cumulative_", choice[match(input$plot,choice$dropdown),2]))]
+    ts_total = ts(total_world[,2], start=min(total_world[,1]))
     
-    a <- ggplot(data = world_Data) + 
-      geom_line(aes(year, 
-                    total_world)) +
-      labs(title = paste0("World Total ", input$plot),
-           x = "",
-           y = "",
-           colour = "")
+    # get forecast
+    if (identical(input$forecast, "NAIVE")){
+      forecast = do.call(choice[match(input$forecast,choice$dropdown),2], list(ts_total, h=input$`step-ahead`))
+    } 
+    else {
+      model <- do.call(choice[match(input$forecast,choice$dropdown),2], list(ts_total))
+      forecast <- forecast(model, h=input$`step-ahead`)
+    }
     
-    ggplotly(a, tooltip = c("x", "y", "colour"))
+    if (identical(input$forecast, "NEURAL NETWORK")){
+      # plot forecast
+      {cbind(actuals=forecast$x, forecast_mean=forecast$mean)} %>%
+        dygraph(main=paste0("World Total ", input$plot, " Emissions")) %>%
+        dySeries("actuals", color = "black") %>%
+        dySeries("forecast_mean", label = "forecast", color = "blue") %>%
+        dyAxis("x", drawGrid = FALSE) %>%
+        dyOptions(includeZero = TRUE, 
+                  axisLineColor = "navy", 
+                  gridLineColor = "lightblue")
+    } else{
+      # plot forecast
+      {cbind(actuals=forecast$x, forecast_mean=forecast$mean,
+             lower_95=forecast$lower[,"95%"], upper_95=forecast$upper[,"95%"])} %>%
+        dygraph(main=paste0("World Total ", input$plot, " Emissions")) %>%
+        dySeries("actuals", color = "black") %>%
+        dySeries(c("lower_95", "forecast_mean", "upper_95"),
+                 label = "forecast", color = "blue") %>%
+        dyAxis("x", drawGrid = FALSE) %>%
+        dyOptions(includeZero = TRUE, 
+                  axisLineColor = "navy", 
+                  gridLineColor = "lightblue")
+    }
   })
   
   ## World Map
