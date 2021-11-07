@@ -3,6 +3,7 @@ library(shinyWidgets)
 library(shinythemes)
 library(plotly)
 library(leaflet)
+library(dygraphs)
 
 ## grab data from github
 raw_Data <- read.csv("https://raw.githubusercontent.com/owid/co2-data/master/owid-co2-data.csv")
@@ -51,15 +52,22 @@ shinyUI(
         choices=NULL, 
         options = list(`actions-box` = TRUE, `none-selected-text` = "Please make a selection!"),
         multiple = FALSE),
+      pickerInput(
+        "forecast", label=h5("Model"), 
+        choices=NULL, 
+        options = list(`actions-box` = TRUE, `none-selected-text` = "Please make a selection!"),
+        multiple = FALSE),
+      numericInput("step-ahead",label=h5("Years to Forecast"),0),
       plotlyOutput("w0"),
       sliderInput("yearw0", "Year", value = max(world_Data$year), min = min(world_Data$year), max = max(world_Data$year), sep = "")
       ),
     mainPanel(
       fluidRow(
-        plotlyOutput("w1")
+        dygraphOutput("w1")
       ),
+      br(),
       fluidRow(
-        plotlyOutput("w2")
+        dygraphOutput("w2")
       )
     ))           
     ),   
