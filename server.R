@@ -137,6 +137,8 @@ mapData@data = right_join(mapData@data, cumulative, by = c('ISO_A3' = 'iso_code'
 # only keep matching data
 mapData@polygons = mapData@polygons[countries@data$ISO_A3 %in% cumulative$iso_code]
 
+
+
 ################ Build the charts ################ 
 function(input, output, session) {
 ### Input
@@ -162,9 +164,191 @@ function(input, output, session) {
   updatePickerInput(session, "forecast", choices=c("NAIVE", "SIMPLE EXPONENTIAL SMOOTHING", "HOLT", "ETS","ARIMA", "NEURAL NETWORK"), selected = "ARIMA") 
   updateNumericInput(session, "step-ahead", value = 10, min = 0, max = NULL, step = NULL)
   
+  
+  #### function to get ts forecasts
+  get_forecast <- function(metric, plot, fc_model, h) {
+    if (identical(plot, "")) return(NULL)
+    annual_world <- world_Data[,c('year', ifelse(metric=="cumulative_", paste0("cumulative_", choice[match(plot,choice$dropdown),2]), paste0(choice[match(plot,choice$dropdown),2])))]
+    ts_annual = ts(annual_world[,2], start=min(annual_world[,1]))
+    
+    # get forecast
+    v <- c("NAIVE", "HOLT", "SIMPLE EXPONENTIAL SMOOTHING") 
+    if (fc_model %in% v){
+      forecast = do.call(choice[match(fc_model,choice$dropdown),2], list(ts_annual, h=h))
+    } 
+    else {
+      model <- do.call(choice[match(fc_model,choice$dropdown),2], list(ts_annual))
+      forecast <- forecast(model, h=h)
+    }
+    return(forecast)
+  }
+  
+  
 ### Output
 
-  ## Plots
+  ############# FIRST TAB #############
+  ## World Map
+  output$map <- renderLeaflet({
+    # color palette
+    pal <- colorNumeric("BuPu", NULL)
+    # create leaflet plot
+    leaf_map = leaflet(mapData,
+                       width = 1040, 
+                       height = 800,
+                       options = leafletOptions(center = c(30,0),
+                                                zoom=2,
+                                                maxBounds = list(c(-90, -180),
+                                                                 c(90,180)))
+    )  %>% addTiles() 
+    leaf_map = leaf_map %>%
+      addPolygons(stroke = FALSE, 
+                  smoothFactor = 0.3,
+                  fillOpacity = 1,
+                  fillColor = ~pal(log10(cumulative_co2)),
+                  label = ~paste0(ADMIN," ", year, ": ",ez_labels(cumulative_co2, signif = 3))
+      )
+    leaf_map = leaf_map %>%
+      addLegend(pal = pal,
+                values = ~log10(cumulative_co2),
+                title = "Total CO2 Emissions",
+                position = c("bottomleft"),
+                opacity = 1.0,
+                labFormat = labelFormat(transform = function(x) round(10^x))
+      )
+    leaf_map
+  })
+  
+  ## Absolute panel on world map
+  current_world <- subset(world_Data, year == max(year))
+  current_co2 <- current_world$co2
+  output$annual_co2 <- renderText(paste(ez_labels(current_co2, signif = 3), "Annual co2 "))
+  
+  current_co2_total <- current_world$cumulative_co2
+  output$total_co2 <- renderText(paste(ez_labels(current_co2_total, signif = 3), "Total co2 "))
+  
+  today_date <- max(subset(current_world, select = c(year)))
+  format(today_date, format="%Y")
+  output$today_date <- renderText(format(today_date, format="%Y"))
+  
+  output$world_daily <- renderPlot({
+    ggplot(world_Data, aes(x = year, y = co2)) + 
+      geom_line() + ylab("Annual co2") +  xlab(NULL)
+  })
+  
+  output$world_cumulative <- renderPlot({
+    ggplot(world_Data, aes(x = year, y = cumulative_co2)) + 
+      geom_line() + ylab("Cumulative co2") +  xlab(NULL)
+  })
+  
+  ############# SECOND TAB #############
+  ## World Plots
+  # pie chart
+  output$w_pie <- renderPlotly({
+    current_world <- world_Data[(world_Data$year == input$year_w_pie),]
+    category <- c("coal_co2", "cement_co2", "flaring_co2", "gas_co2", "oil_co2", "other_co2")
+    value <- c(as.integer(current_world["coal_co2"][1]), as.integer(current_world["cement_co2"][1]), as.integer(current_world["flaring_co2"][1]), as.integer(current_world["gas_co2"][1]), as.integer(current_world["oil_co2"][1]), as.integer(current_world["other_co2"][1]))
+    pie_data <- data.frame(category, value)
+    
+    colors <- c('rgb(211,94,96)', 'rgb(128,133,133)', 'rgb(144,103,167)', 'rgb(171,104,87)', 'rgb(114,147,203)')
+    
+    fig <- plot_ly(pie_data, labels = category, values = value, type = 'pie',
+                   textposition = 'outside',
+                   textinfo = 'percent',
+                   
+                   hoverinfo = 'text',
+                   text = ~paste(category, ':', value, ' M'),
+                   marker = list(colors = colors,
+                                 line = list(color = '#FFFFFF', width = 1)),
+                   #The 'pull' attribute can also be used to create space between the sectors
+                   showlegend = TRUE)
+    fig <- fig %>% layout(title = "CO2 Emissions",
+                          paper_bgcolor='transparent',
+                          xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
+                          yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE))
+    
+    fig
+  }) 
+  
+  output$ann_mod <- renderText({
+    paste0("Model: ", input$forecast)
+  })
+  
+  output$ann_aic <- renderText({
+    paste0("AIC: ", ifelse(input$forecast %in% c("NAIVE", "NEURAL NETWORK"), "N/A", 
+                           round(AIC(get_forecast("annual", input$plot, input$forecast, input$`step-ahead`)$model),2)))
+  })
+  
+  # Annual line chart
+  output$w_ann_line <- renderDygraph({
+    
+    forecast <- get_forecast("annual", input$plot, input$forecast, input$`step-ahead`)
+    
+    if (identical(input$forecast, "NEURAL NETWORK")){
+      # plot forecast
+      {cbind(actuals=forecast$x, forecast_mean=forecast$mean)} %>%
+        dygraph(main=paste0("World Annual ", input$plot, " Emissions")) %>%
+        dySeries("actuals", color = "black") %>%
+        dySeries("forecast_mean", label = "forecast", color = "blue") %>%
+        dyAxis("x", drawGrid = FALSE) %>%
+        dyOptions(includeZero = TRUE, 
+                  axisLineColor = "navy", 
+                  gridLineColor = "lightblue")
+    } else{
+      # plot forecast
+      {cbind(actuals=forecast$x, forecast_mean=forecast$mean,
+             lower_95=forecast$lower[,"95%"], upper_95=forecast$upper[,"95%"])} %>%
+        dygraph(main=paste0("World Annual ", input$plot, " Emissions")) %>%
+        dySeries("actuals", color = "black") %>%
+        dySeries(c("lower_95", "forecast_mean", "upper_95"),
+                 label = "forecast", color = "blue") %>%
+        dyAxis("x", drawGrid = FALSE) %>%
+        dyOptions(includeZero = TRUE, 
+                  axisLineColor = "navy", 
+                  gridLineColor = "lightblue")
+    }
+  })
+
+  output$tot_mod <- renderText({
+    paste0("Model: ", input$forecast)
+  })
+  
+  output$tot_aic <- renderText({
+    paste0("AIC: ", ifelse(input$forecast %in% c("NAIVE", "NEURAL NETWORK"), "N/A", 
+                      round(AIC(get_forecast("cumulative_", input$plot, input$forecast, input$`step-ahead`)$model),2)))
+  })
+  
+  # Total line chart
+  output$w_tot_line <- renderDygraph({
+    
+    forecast <- get_forecast("cumulative_", input$plot, input$forecast, input$`step-ahead`)
+    
+    if (identical(input$forecast, "NEURAL NETWORK")){
+      # plot forecast
+      {cbind(actuals=forecast$x, forecast_mean=forecast$mean)} %>%
+        dygraph(main=paste0("World Total ", input$plot, " Emissions")) %>%
+        dySeries("actuals", color = "black") %>%
+        dySeries("forecast_mean", label = "forecast", color = "blue") %>%
+        dyAxis("x", drawGrid = FALSE) %>%
+        dyOptions(includeZero = TRUE, 
+                  axisLineColor = "navy", 
+                  gridLineColor = "lightblue")
+    } else{
+      # plot forecast
+      {cbind(actuals=forecast$x, forecast_mean=forecast$mean,
+             lower_95=forecast$lower[,"95%"], upper_95=forecast$upper[,"95%"])} %>%
+        dygraph(main=paste0("World Total ", input$plot, " Emissions")) %>%
+        dySeries("actuals", color = "black") %>%
+        dySeries(c("lower_95", "forecast_mean", "upper_95"),
+                 label = "forecast", color = "blue") %>%
+        dyAxis("x", drawGrid = FALSE) %>%
+        dyOptions(includeZero = TRUE, 
+                  axisLineColor = "navy", 
+                  gridLineColor = "lightblue")
+    }
+  })
+  
+  ############# THIRD TAB #############
+  
   # Annual CO2
   output$a1 <- renderPlotly({
       req(input$country)
@@ -257,175 +441,14 @@ function(input, output, session) {
     ggplotly(a, tooltip = c("x", "y", "colour"))
   })
   
-  ## World Plots
-  # pie chart
-  output$w0 <- renderPlotly({
-    current_world <- world_Data[(world_Data$year == input$yearw0),]
-    category <- c("coal_co2", "cement_co2", "flaring_co2", "gas_co2", "oil_co2", "other_co2")
-    value <- c(as.integer(current_world["coal_co2"][1]), as.integer(current_world["cement_co2"][1]), as.integer(current_world["flaring_co2"][1]), as.integer(current_world["gas_co2"][1]), as.integer(current_world["oil_co2"][1]), as.integer(current_world["other_co2"][1]))
-    pie_data <- data.frame(category, value)
-    
-    colors <- c('rgb(211,94,96)', 'rgb(128,133,133)', 'rgb(144,103,167)', 'rgb(171,104,87)', 'rgb(114,147,203)')
-    
-    fig <- plot_ly(pie_data, labels = category, values = value, type = 'pie',
-                   textposition = 'outside',
-                   textinfo = 'percent',
-
-                   hoverinfo = 'text',
-                   text = ~paste(category, ':', value, ' M'),
-                   marker = list(colors = colors,
-                                 line = list(color = '#FFFFFF', width = 1)),
-                   #The 'pull' attribute can also be used to create space between the sectors
-                   showlegend = TRUE)
-    fig <- fig %>% layout(title = "CO2 Emissions",
-                          paper_bgcolor='transparent',
-                          xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
-                          yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE))
-    
-    fig
-  }) 
-  
-  # Annual line chart
-  output$w1 <- renderDygraph({
-    if (identical(input$plot, "")) return(NULL)
-    annual_world <- world_Data[,c('year', paste0(choice[match(input$plot,choice$dropdown),2]))]
-    ts_annual = ts(annual_world[,2], start=min(annual_world[,1]))
-    
-    # get forecast
-    v <- c("NAIVE", "HOLT", "SIMPLE EXPONENTIAL SMOOTHING") 
-    if (input$forecast %in% v){
-      forecast = do.call(choice[match(input$forecast,choice$dropdown),2], list(ts_annual, h=input$`step-ahead`))
-    } 
-    else {
-    model <- do.call(choice[match(input$forecast,choice$dropdown),2], list(ts_annual))
-    forecast <- forecast(model, h=input$`step-ahead`)
-    }
-    
-    if (identical(input$forecast, "NEURAL NETWORK")){
-      # plot forecast
-      {cbind(actuals=forecast$x, forecast_mean=forecast$mean)} %>%
-        dygraph(main=paste0("World Annual ", input$plot, " Emissions")) %>%
-        dySeries("actuals", color = "black") %>%
-        dySeries("forecast_mean", label = "forecast", color = "blue") %>%
-        dyAxis("x", drawGrid = FALSE) %>%
-        dyOptions(includeZero = TRUE, 
-                  axisLineColor = "navy", 
-                  gridLineColor = "lightblue")
-    } else{
-    # plot forecast
-    {cbind(actuals=forecast$x, forecast_mean=forecast$mean,
-                  lower_95=forecast$lower[,"95%"], upper_95=forecast$upper[,"95%"])} %>%
-      dygraph(main=paste0("World Annual ", input$plot, " Emissions")) %>%
-      dySeries("actuals", color = "black") %>%
-      dySeries(c("lower_95", "forecast_mean", "upper_95"),
-               label = "forecast", color = "blue") %>%
-      dyAxis("x", drawGrid = FALSE) %>%
-      dyOptions(includeZero = TRUE, 
-                  axisLineColor = "navy", 
-                  gridLineColor = "lightblue")
-    }
-  })
-  
-  # Total line chart
-  output$w2 <- renderDygraph({
-    if (identical(input$plot, "")) return(NULL)
-    total_world <- world_Data[,c('year', paste0("cumulative_", choice[match(input$plot,choice$dropdown),2]))]
-    ts_total = ts(total_world[,2], start=min(total_world[,1]))
-    
-    # get forecast
-    v <- c("NAIVE", "HOLT", "SIMPLE EXPONENTIAL SMOOTHING") 
-    if (input$forecast %in% v){
-      forecast = do.call(choice[match(input$forecast,choice$dropdown),2], list(ts_total, h=input$`step-ahead`))
-    } 
-    else {
-      model <- do.call(choice[match(input$forecast,choice$dropdown),2], list(ts_total))
-      forecast <- forecast(model, h=input$`step-ahead`)
-    }
-    
-    if (identical(input$forecast, "NEURAL NETWORK")){
-      # plot forecast
-      {cbind(actuals=forecast$x, forecast_mean=forecast$mean)} %>%
-        dygraph(main=paste0("World Total ", input$plot, " Emissions")) %>%
-        dySeries("actuals", color = "black") %>%
-        dySeries("forecast_mean", label = "forecast", color = "blue") %>%
-        dyAxis("x", drawGrid = FALSE) %>%
-        dyOptions(includeZero = TRUE, 
-                  axisLineColor = "navy", 
-                  gridLineColor = "lightblue")
-    } else{
-      # plot forecast
-      {cbind(actuals=forecast$x, forecast_mean=forecast$mean,
-             lower_95=forecast$lower[,"95%"], upper_95=forecast$upper[,"95%"])} %>%
-        dygraph(main=paste0("World Total ", input$plot, " Emissions")) %>%
-        dySeries("actuals", color = "black") %>%
-        dySeries(c("lower_95", "forecast_mean", "upper_95"),
-                 label = "forecast", color = "blue") %>%
-        dyAxis("x", drawGrid = FALSE) %>%
-        dyOptions(includeZero = TRUE, 
-                  axisLineColor = "navy", 
-                  gridLineColor = "lightblue")
-    }
-  })
-  
-  ## World Map
-  output$distPlot <- renderLeaflet({
-  # color palette
-  pal <- colorNumeric("BuPu", NULL)
-  # create leaflet plot
-  leaf_map = leaflet(mapData,
-                     width = 1040, 
-                     height = 800,
-                     options = leafletOptions(center = c(30,0),
-                                              zoom=2,
-                                              maxBounds = list(c(-90, -180),
-                                                               c(90,180)))
-  )  %>% addTiles() 
-  leaf_map = leaf_map %>%
-    addPolygons(stroke = FALSE, 
-                smoothFactor = 0.3,
-                fillOpacity = 1,
-                fillColor = ~pal(log10(cumulative_co2)),
-                label = ~paste0(ADMIN," ", year, ": ",ez_labels(cumulative_co2, signif = 3))
-    )
-  leaf_map = leaf_map %>%
-    addLegend(pal = pal,
-              values = ~log10(cumulative_co2),
-              title = "Total CO2 Emissions",
-              position = c("bottomleft"),
-              opacity = 1.0,
-              labFormat = labelFormat(transform = function(x) round(10^x))
-    )
-    leaf_map
-  })
-  
-  ## Absolute panel on world map
-  current_world <- subset(world_Data, year == max(year))
-  current_co2 <- current_world$co2
-  output$annual_co2 <- renderText(paste(ez_labels(current_co2, signif = 3), "Annual co2 "))
-  
-  current_co2_total <- current_world$cumulative_co2
-  output$total_co2 <- renderText(paste(ez_labels(current_co2_total, signif = 3), "Total co2 "))
-  
-  today_date <- max(subset(current_world, select = c(year)))
-  format(today_date, format="%Y")
-  output$today_date <- renderText(format(today_date, format="%Y"))
-  
-  output$world_daily <- renderPlot({
-  ggplot(world_Data, aes(x = year, y = co2)) + 
-        geom_line() + ylab("Annual co2") +  xlab(NULL)
-    })
-    
-  output$world_cumulative <- renderPlot({
-  ggplot(world_Data, aes(x = year, y = cumulative_co2)) + 
-        geom_line() + ylab("Cumulative co2") +  xlab(NULL)
-  })
-  
+  ############# FOURTH TAB #############
   ## data table on last tab
   # There is also one for shiny, but using DT
   output$mytable = DT::renderDataTable(options = list(scrollX = TRUE), {
     country_Data[(country_Data$year == input$yeardt),]
   })
   
+  # LINK TO DATA
   output$tab <- renderUI({
     url <- a("Our World in Data", href="https://github.com/owid/co2-data")
     tagList("Link to data:", url)
