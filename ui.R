@@ -3,6 +3,13 @@ library(shinyWidgets)
 library(shinythemes)
 library(plotly)
 library(leaflet)
+library(dygraphs)
+
+## grab data from github
+raw_Data <- read.csv("https://raw.githubusercontent.com/owid/co2-data/master/owid-co2-data.csv")
+
+# world data
+world_Data <- subset(raw_Data, iso_code == "OWID_WRL")
 
 shinyUI(
   ## Main ui
@@ -19,7 +26,7 @@ shinyUI(
   ## First tab
   tabPanel("World Map", 
           # ui/server for first tab
-          leafletOutput(outputId = "distPlot", height = 700 ),
+          leafletOutput(outputId = "map", height = 700 ),
            
           absolutePanel(id = "controls", class = "panel panel-default",
                     top = 95, right = 25, width = 250, fixed=TRUE,
@@ -45,15 +52,26 @@ shinyUI(
         choices=NULL, 
         options = list(`actions-box` = TRUE, `none-selected-text` = "Please make a selection!"),
         multiple = FALSE),
-      plotlyOutput("w0"),
-      sliderInput("yearw0", "Year", value = max(world_Data$year), min = min(world_Data$year), max = max(world_Data$year), sep = "")
+      pickerInput(
+        "forecast", label=h5("Model"), 
+        choices=NULL, 
+        options = list(`actions-box` = TRUE, `none-selected-text` = "Please make a selection!"),
+        multiple = FALSE),
+      numericInput("step-ahead",label=h5("Years to Forecast"),0),
+      plotlyOutput("w_pie"),
+      sliderInput("year_w_pie", "Year", value = max(world_Data$year), min = min(world_Data$year), max = max(world_Data$year), sep = "")
       ),
     mainPanel(
+      h4(textOutput("ann_mod")),
+      h4(textOutput("ann_aic")),
       fluidRow(
-        plotlyOutput("w1")
+        dygraphOutput("w_ann_line")
       ),
+      br(),
+      h4(textOutput("tot_mod")),
+      h4(textOutput("tot_aic")),
       fluidRow(
-        plotlyOutput("w2")
+        dygraphOutput("w_tot_line")
       )
     ))           
     ),   
